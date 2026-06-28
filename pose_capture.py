@@ -6,57 +6,82 @@ from mediapipe.tasks.python.vision import drawing_utils, drawing_styles
 from mediapipe.tasks.python import vision
 from cv2.gapi.streaming import timestamp
 
-def calcAngles(landmarker, landmarks, frame):
-    # Example function to calculate angles between specific landmarks
-    # This is a placeholder; actual implementation will depend on the landmarks of interest
-    # Check if EITHER L_Elbow + L_Shoulder + L_Wrist OR R_Elbow + R_Shoulder + R_Wrist are present
-
+# Getting angle of left bicep to a horizontal line.
+def calcLeftBicepAngle(landmarks, frame):
     h, w, _ = frame.shape
-    print(f"Max values of height and width{h, w}")
-    # left arm landmarks section - Angle Detection
+
+    # left arm landmarks section
     if landmarks[vision.PoseLandmark.LEFT_ELBOW] and landmarks[vision.PoseLandmark.LEFT_SHOULDER]:
         left_elbow = landmarks[vision.PoseLandmark.LEFT_ELBOW]
         left_shoulder = landmarks[vision.PoseLandmark.LEFT_SHOULDER]
-        # Calculate angle between left shoulder, to left elbow, to horizontal line
-        # Arm is ideally a straight line down
-        # so an imaginary x axis line will be used to see if it's close to 90*
-
-        left_elbow_pos = np.array([left_elbow.x * w,
-                                   left_elbow.y * h,
-                                   left_elbow.z * w
-                                   ], dtype=np.float32)
-
-        left_shoulder_pos = np.array([left_shoulder.x * w,
-                                  left_shoulder.y * h,
-                                  left_shoulder.z * w
-                                  ], dtype=np.float32)
         
-        lsx, lsy = int(left_shoulder_pos[0]), int(left_shoulder_pos[1])
-        lex, ley = int(left_elbow_pos[0]), int(left_elbow_pos[1])
-        print(f"Left Shoulder = {lsx, lsy}")
-        print(f"Left Elbow = {lex, ley}")
+        # Get actual positions of points 
+        lsx, lsy = int(left_shoulder.x * w), int(left_shoulder.y * h)
+        lex, ley = int(left_elbow.x * w), int(left_elbow.y * h)
+        
+        dx = lex - lsx
+        dy = ley - lsy
 
-    if landmarks[vision.PoseLandmark.RIGHT_ELBOW] and landmarks[vision.PoseLandmark.RIGHT_SHOULDER]:
+        angle_rad = np.arctan2(dy,dx)
+        angle_deg = np.degrees(angle_rad)
+        ref_point_x = lsx + 100 
+        ref_point_y = lsy
+        
+        # HORIZONTAL LINE ON SHOULDER
+        cv2.line(frame, (lsx, lsy), (ref_point_x, ref_point_y), (0, 255, 0), 2)
+                
+        # Draw the Arm Vector (Shoulder to Elbow) (Blue)
+        cv2.line(frame, (lsx, lsy), (lex, ley), (255, 0, 0), 2)
+        
+        # Draw the Angle Text near the Shoulder
+        # Format: "Angle: -45.2 deg"
+        label = f"{angle_deg:.1f} deg"
+        cv2.putText(frame, label, (lsx + 10, lsy - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        # Optional: Draw circles at joints for clarity
+        cv2.circle(frame, (lsx, lsy), 5, (0, 255, 0), -1) # Shoulder
+        cv2.circle(frame, (lex, ley), 5, (255, 0, 0), -1) # Elbow
+        print(f"Left Bicep Angle: {angle_deg:.2f} degrees.")
 
+# Getting angle of right bicep to a horizontal line.
+def calcRightBicepAngle(landmarks, frame):
+       h, w, _ = frame.shape
+
+       if landmarks[vision.PoseLandmark.RIGHT_ELBOW] and landmarks[vision.PoseLandmark.RIGHT_SHOULDER]:
         right_elbow = landmarks[vision.PoseLandmark.RIGHT_ELBOW]
         right_shoulder = landmarks[vision.PoseLandmark.RIGHT_SHOULDER]
 
-        right_elbow_pos = np.array([right_elbow.x * w,
-                                   right_elbow.y * h,
-                                   right_elbow.z * w
-                                   ], dtype=np.float32)
-
-        right_shoulder_pos = np.array([right_shoulder.x * w,
-                                  left_shoulder.y * h,
-                                  left_shoulder.z * w
-                                  ], dtype=np.float32)
+        # Get actual positions of points
+        rsx, rsy = int(right_shoulder.x * w), int(right_shoulder.y * h)
+        rex, rey = int(right_elbow.x * w), int(right_elbow.y * h)
         
-        rsx, rsy = int(right_shoulder_pos[0]), int(right_shoulder_pos[1])
-        rex, rey = int(right_elbow_pos[0]), int(right_elbow_pos[1])
-        print(f"Right Shoulder = {rsx, rsy}")
-        print(f"Right Elbow = {rex, rey}")
+        dx = rex - rsx
+        dy = rey - rsy
+
+        angle_rad = np.arctan2(dy, dx)
+        angle_deg = np.degrees(angle_rad)
+        ref_point_x = rsx + 100 
+        ref_point_y = rsy
+
+        # HORIZONTAL LINE ON SHOULDER
+        cv2.line(frame, (rsx, rsy), (ref_point_x, ref_point_y), (0, 255, 0), 2)
+        
+        # Arm Vector (Shoulder to Elbow) (Blue)
+        cv2.line(frame, (rsx, rsy), (rex, rey), (255, 0, 0), 2)
+        
+        # Angle Text (Yellow)
+        label = f"{angle_deg:.1f} deg"
+        cv2.putText(frame, label, (rsx + 10, rsy - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        # Joint Circles
+        cv2.circle(frame, (rsx, rsy), 5, (0, 255, 0), -1) # Shoulder
+        cv2.circle(frame, (rex, rey), 5, (255, 0, 0), -1) # Elbow
+        print(f"Right Bicep Angle: {angle_deg:.2f} degrees.")
 
 def main():
+
     # Configuration
     base_options = python.BaseOptions(model_asset_path='pose_landmarker_full.task')
     options1 = vision.PoseLandmarkerOptions(
@@ -71,10 +96,7 @@ def main():
     cap = cv2.VideoCapture(0) # 0 is the first camera source cv2 can detect.
     landmarker = vision.PoseLandmarker.create_from_options(options1)
 
-    # With: keyword for python that handles file management and closing files once 
-    #   code block ends.
-    # mp.Pose params: lower confidence means more times program will acknowledge 
-    #   a body part even if it isn't highly confident. 50% is a good enough value.
+    # Controller For Pose Tracking
     try:
         while cap.isOpened():
             ret, frame = cap.read()
@@ -115,13 +137,15 @@ def main():
                     )
                 
                 display_image = annotated_image
-                calcAngles(landmarker, pose_landmarks, frame)
+                calcLeftBicepAngle(pose_landmarks, frame)
+                calcRightBicepAngle(pose_landmarks, frame)
 
             # Display the annotated image
-            cv2.imshow('Pose Landmarker', display_image)
+            cv2.imshow('Pose Landmarker', frame)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
+
     except KeyboardInterrupt:
         print("Interrupted by user. Exiting...")
         pass
