@@ -6,12 +6,14 @@ from mediapipe.tasks.python.vision import drawing_utils, drawing_styles
 from mediapipe.tasks.python import vision
 from cv2.gapi.streaming import timestamp
 
+MIN_VISIBILITY = 0.6
+
 # Getting angle of left bicep to a horizontal line.
 def calcLeftBicepAngle(landmarks, frame):
     h, w, _ = frame.shape
 
     # left arm landmarks section
-    if landmarks[vision.PoseLandmark.LEFT_ELBOW] and landmarks[vision.PoseLandmark.LEFT_SHOULDER]:
+    if landmarks[vision.PoseLandmark.LEFT_ELBOW].visibility > MIN_VISIBILITY and landmarks[vision.PoseLandmark.LEFT_SHOULDER].visibility > MIN_VISIBILITY:
         left_elbow = landmarks[vision.PoseLandmark.LEFT_ELBOW]
         left_shoulder = landmarks[vision.PoseLandmark.LEFT_SHOULDER]
         
@@ -23,10 +25,12 @@ def calcLeftBicepAngle(landmarks, frame):
         dy = ley - lsy
 
         angle_rad = np.arctan2(dy,dx)
-        angle_deg = np.degrees(angle_rad)
+        angle_deg = np.degrees(angle_rad) # ANGLE IN DEGREES
         ref_point_x = lsx + 100 
         ref_point_y = lsy
         
+
+        # <<< DRAWING SECTION >>>
         # HORIZONTAL LINE ON SHOULDER
         cv2.line(frame, (lsx, lsy), (ref_point_x, ref_point_y), (0, 255, 0), 2)
                 
@@ -42,13 +46,14 @@ def calcLeftBicepAngle(landmarks, frame):
         # Optional: Draw circles at joints for clarity
         cv2.circle(frame, (lsx, lsy), 5, (0, 255, 0), -1) # Shoulder
         cv2.circle(frame, (lex, ley), 5, (255, 0, 0), -1) # Elbow
+
         print(f"Left Bicep Angle: {angle_deg:.2f} degrees.")
 
 # Getting angle of right bicep to a horizontal line.
 def calcRightBicepAngle(landmarks, frame):
        h, w, _ = frame.shape
 
-       if landmarks[vision.PoseLandmark.RIGHT_ELBOW] and landmarks[vision.PoseLandmark.RIGHT_SHOULDER]:
+       if landmarks[vision.PoseLandmark.RIGHT_ELBOW].visibility > MIN_VISIBILITY and landmarks[vision.PoseLandmark.RIGHT_SHOULDER].visibility > MIN_VISIBILITY:
         right_elbow = landmarks[vision.PoseLandmark.RIGHT_ELBOW]
         right_shoulder = landmarks[vision.PoseLandmark.RIGHT_SHOULDER]
 
@@ -60,10 +65,11 @@ def calcRightBicepAngle(landmarks, frame):
         dy = rey - rsy
 
         angle_rad = np.arctan2(dy, dx)
-        angle_deg = np.degrees(angle_rad)
+        angle_deg = np.degrees(angle_rad) # ANGLE IN DEGREES
         ref_point_x = rsx + 100 
         ref_point_y = rsy
 
+        # <<< DRAWING SECTION >>>
         # HORIZONTAL LINE ON SHOULDER
         cv2.line(frame, (rsx, rsy), (ref_point_x, ref_point_y), (0, 255, 0), 2)
         
@@ -79,6 +85,84 @@ def calcRightBicepAngle(landmarks, frame):
         cv2.circle(frame, (rsx, rsy), 5, (0, 255, 0), -1) # Shoulder
         cv2.circle(frame, (rex, rey), 5, (255, 0, 0), -1) # Elbow
         print(f"Right Bicep Angle: {angle_deg:.2f} degrees.")
+
+# Getting angle of left forearm to a horizontal line.
+def calcLeftForearmAngle(landmarks, frame):
+    # Using the elbow joint to the wrist joint, then considering
+    # the horizontal line from the elbow to the left.
+    h, w, _ = frame.shape
+
+    if landmarks[vision.PoseLandmark.LEFT_ELBOW].visibility > MIN_VISIBILITY and landmarks[vision.PoseLandmark.LEFT_WRIST].visibility > MIN_VISIBILITY:
+        left_elbow = landmarks[vision.PoseLandmark.LEFT_ELBOW]
+        left_wrist = landmarks[vision.PoseLandmark.LEFT_WRIST]
+
+        # Get actual positions of points
+        lex, ley = int(left_elbow.x * w), int(left_elbow.y * h)
+        lwx, lwy = int(left_wrist.x * w), int(left_wrist.y * h)
+
+        dx = lwx - lex
+        dy = lwy - ley
+
+        angle_rad = np.arctan2(dy, dx)
+        angle_deg = np.degrees(angle_rad) # ANGLE IN DEGREES
+        ref_point_x = lex - 100 
+        ref_point_y = ley
+
+        # <<< DRAWING SECTION >>>
+        # HORIZONTAL LINE ON ELBOW
+        cv2.line(frame, (lex, ley), (ref_point_x, ref_point_y), (0, 255, 0), 2)
+        
+        # Forearm Vector (Elbow to Wrist) (Blue)
+        cv2.line(frame, (lex, ley), (lwx, lwy), (255, 0, 0), 2)
+        
+        # Angle Text (Yellow)
+        label = f"{angle_deg:.1f} deg"
+        cv2.putText(frame, label, (lex + 10, ley - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        # Joint Circles
+        cv2.circle(frame, (lex, ley), 5, (0, 255, 0), -1) # Elbow
+        cv2.circle(frame, (lwx, lwy), 5, (255, 0, 0), -1) # Wrist
+        print(f"Left Forearm Angle: {angle_deg:.2f} degrees.")
+
+# Getting angle of right forearm to a horizontal line.
+def calcRightForearmAngle(landmarks, frame):
+    # Using the elbow joint to the wrist joint, then considering
+    # the horizontal line from the elbow to the right.
+    h, w, _ = frame.shape
+
+    if landmarks[vision.PoseLandmark.RIGHT_ELBOW].visibility > MIN_VISIBILITY and landmarks[vision.PoseLandmark.RIGHT_WRIST].visibility > MIN_VISIBILITY:
+        right_elbow = landmarks[vision.PoseLandmark.RIGHT_ELBOW]
+        right_wrist = landmarks[vision.PoseLandmark.RIGHT_WRIST]
+
+        # Get actual positions of points
+        rex, rey = int(right_elbow.x * w), int(right_elbow.y * h)
+        rwx, rwy = int(right_wrist.x * w), int(right_wrist.y * h)
+
+        dx = rwx - rex
+        dy = rwy - rey
+
+        angle_rad = np.arctan2(dy, dx)
+        angle_deg = np.degrees(angle_rad) # ANGLE IN DEGREES
+        ref_point_x = rex + 100 
+        ref_point_y = rey
+
+        # <<< DRAWING SECTION >>>
+        # HORIZONTAL LINE ON ELBOW
+        cv2.line(frame, (rex, rey), (ref_point_x, ref_point_y), (0, 255, 0), 2)
+        
+        # Forearm Vector (Elbow to Wrist) (Blue)
+        cv2.line(frame, (rex, rey), (rwx, rwy), (255, 0, 0), 2)
+        
+        # Angle Text (Yellow)
+        label = f"{angle_deg:.1f} deg"
+        cv2.putText(frame, label, (rex + 10, rey - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        # Joint Circles
+        cv2.circle(frame, (rex, rey), 5, (0, 255, 0), -1) # Elbow
+        cv2.circle(frame, (rwx, rwy), 5, (255, 0, 0), -1) # Wrist
+        print(f"Right Forearm Angle: {angle_deg:.2f} degrees.")
 
 def main():
 
@@ -139,6 +223,8 @@ def main():
                 display_image = annotated_image
                 calcLeftBicepAngle(pose_landmarks, frame)
                 calcRightBicepAngle(pose_landmarks, frame)
+                calcLeftForearmAngle(pose_landmarks, frame)
+                calcRightForearmAngle(pose_landmarks, frame)
 
             # Display the annotated image
             cv2.imshow('Pose Landmarker', frame)
