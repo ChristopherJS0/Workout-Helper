@@ -8,6 +8,7 @@ from cv2.gapi.streaming import timestamp
 
 MIN_VISIBILITY = 0.6
 
+# ----------- ANGLE CALCULATION FUNCTIONS ----------- #
 # Getting angle of left bicep to a horizontal line.
 def calcLeftBicepAngle(landmarks, frame):
     h, w, _ = frame.shape
@@ -47,7 +48,7 @@ def calcLeftBicepAngle(landmarks, frame):
         cv2.circle(frame, (lsx, lsy), 5, (0, 255, 0), -1) # Shoulder
         cv2.circle(frame, (lex, ley), 5, (255, 0, 0), -1) # Elbow
 
-        print(f"Left Bicep Angle: {angle_deg:.2f} degrees.")
+        return angle_deg
 
 # Getting angle of right bicep to a horizontal line.
 def calcRightBicepAngle(landmarks, frame):
@@ -84,7 +85,8 @@ def calcRightBicepAngle(landmarks, frame):
         # Joint Circles
         cv2.circle(frame, (rsx, rsy), 5, (0, 255, 0), -1) # Shoulder
         cv2.circle(frame, (rex, rey), 5, (255, 0, 0), -1) # Elbow
-        print(f"Right Bicep Angle: {angle_deg:.2f} degrees.")
+        # print(f"Right Bicep Angle: {angle_deg:.2f} degrees.")
+        return angle_deg
 
 # Getting angle of left forearm to a horizontal line.
 def calcLeftForearmAngle(landmarks, frame):
@@ -123,10 +125,12 @@ def calcLeftForearmAngle(landmarks, frame):
         # Joint Circles
         cv2.circle(frame, (lex, ley), 5, (0, 255, 0), -1) # Elbow
         cv2.circle(frame, (lwx, lwy), 5, (255, 0, 0), -1) # Wrist
-        print(f"Left Forearm Angle: {angle_deg:.2f} degrees.")
+        # print(f"Left Forearm Angle: {angle_deg:.2f} degrees.")
+        return angle_deg
 
 # Getting angle of right forearm to a horizontal line.
 def calcRightForearmAngle(landmarks, frame):
+    
     # Using the elbow joint to the wrist joint, then considering
     # the horizontal line from the elbow to the right.
     h, w, _ = frame.shape
@@ -162,7 +166,11 @@ def calcRightForearmAngle(landmarks, frame):
         # Joint Circles
         cv2.circle(frame, (rex, rey), 5, (0, 255, 0), -1) # Elbow
         cv2.circle(frame, (rwx, rwy), 5, (255, 0, 0), -1) # Wrist
-        print(f"Right Forearm Angle: {angle_deg:.2f} degrees.")
+        # print(f"Right Forearm Angle: {angle_deg:.2f} degrees.")
+        return angle_deg
+# ----------- end: ANGLE CALCULATION FUNCTIONS ----------- */
+
+
 
 def main():
 
@@ -214,20 +222,19 @@ def main():
                     drawing_utils.draw_landmarks(
                         image=annotated_image,
                         landmark_list=pose_landmarks,
-                        connections=vision.PoseLandmarksConnections.POSE_LANDMARKS, # Draws the skeleton lines
                         # Each dot will have a number
                         landmark_drawing_spec=drawing_styles.get_default_pose_landmarks_style(), # Default dots
                         connection_drawing_spec=drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2) # Custom line color/thickness
                     )
                 
                 display_image = annotated_image
-                calcLeftBicepAngle(pose_landmarks, frame)
-                calcRightBicepAngle(pose_landmarks, frame)
-                calcLeftForearmAngle(pose_landmarks, frame)
-                calcRightForearmAngle(pose_landmarks, frame)
+                calcLeftBicepAngle(pose_landmarks, display_image)
+                calcRightBicepAngle(pose_landmarks, display_image)
+                calcLeftForearmAngle(pose_landmarks, display_image)
+                calcRightForearmAngle(pose_landmarks, display_image)
 
             # Display the annotated image
-            cv2.imshow('Pose Landmarker', frame)
+            cv2.imshow('Pose Landmarker', display_image)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break

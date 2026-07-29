@@ -1,0 +1,314 @@
+import cv2
+import time
+import numpy as np
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python.vision import drawing_utils, drawing_styles
+from mediapipe.tasks.python import vision
+
+MIN_VISIBILITY = 0.6
+
+# ----------- CALIBRATION SETTINGS ----------- #
+ARM_STRAIGHT_TARGET = 90.0      # degrees; arm hanging straight down reads ~90 deg from horizontal
+ARM_STRAIGHT_TOLERANCE = 25.0   # +/- degrees still counted as "straight down"
+STILLNESS_THRESHOLD_PX = 20     # max shoulder drift (px) between frames to count as "still"
+CALIBRATION_HOLD_TIME = 4.0     # seconds the pose must be held (within the requested 3-5s range)
+AUTO_SWITCH_TO_REGULAR = False   # once calibrated, drop into regular mode automatically
+# --------------------------------------------- #
+
+
+# ----------- ANGLE CALCULATION FUNCTIONS ----------- #
+# Each function draws only its own arm line/label (if draw=True) and returns
+# the angle in degrees, or None if the relevant landmarks aren't visible.
+
+def calcLeftBicepAngle(landmarks, frame, draw=True):
+    h, w, _ = frame.shape
+
+    if landmarks[vision.PoseLandmark.LEFT_ELBOW].visibility > MIN_VISIBILITY and landmarks[vision.PoseLandmark.LEFT_SHOULDER].visibility > MIN_VISIBILITY:
+        left_elbow = landmarks[vision.PoseLandmark.LEFT_ELBOW]
+        left_shoulder = landmarks[vision.PoseLandmark.LEFT_SHOULDER]
+
+        lsx, lsy = int(left_shoulder.x * w), int(left_shoulder.y * h)
+        lex, ley = int(left_elbow.x * w), int(left_elbow.y * h)
+
+        dx = lex - lsx
+        dy = ley - lsy
+
+        angle_rad = np.arctan2(dy, dx)
+        angle_deg = np.degrees(angle_rad)
+
+        if draw:
+            label = f"{angle_deg:.1f} deg"
+            cv2.line(frame, (lsx, lsy), (lex, ley), (255, 0, 0), 2)
+            cv2.putText(frame, label, (lsx + 10, lsy - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        return angle_deg
+    return None
+
+
+def calcRightBicepAngle(landmarks, frame, draw=True):
+    h, w, _ = frame.shape
+
+    if landmarks[vision.PoseLandmark.RIGHT_ELBOW].visibility > MIN_VISIBILITY and landmarks[vision.PoseLandmark.RIGHT_SHOULDER].visibility > MIN_VISIBILITY:
+        right_elbow = landmarks[vision.PoseLandmark.RIGHT_ELBOW]
+        right_shoulder = landmarks[vision.PoseLandmark.RIGHT_SHOULDER]
+
+        rsx, rsy = int(right_shoulder.x * w), int(right_shoulder.y * h)
+        rex, rey = int(right_elbow.x * w), int(right_elbow.y * h)
+
+        dx = rex - rsx
+        dy = rey - rsy
+
+        angle_rad = np.arctan2(dy, dx)
+        angle_deg = np.degrees(angle_rad)
+
+        if draw:
+            label = f"{angle_deg:.1f} deg"
+            cv2.line(frame, (rsx, rsy), (rex, rey), (255, 0, 0), 2)
+            cv2.putText(frame, label, (rsx + 10, rsy - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        return angle_deg
+    return None
+
+
+def calcLeftForearmAngle(landmarks, frame, draw=True):
+    h, w, _ = frame.shape
+
+    if landmarks[vision.PoseLandmark.LEFT_ELBOW].visibility > MIN_VISIBILITY and landmarks[vision.PoseLandmark.LEFT_WRIST].visibility > MIN_VISIBILITY:
+        left_elbow = landmarks[vision.PoseLandmark.LEFT_ELBOW]
+        left_wrist = landmarks[vision.PoseLandmark.LEFT_WRIST]
+
+        lex, ley = int(left_elbow.x * w), int(left_elbow.y * h)
+        lwx, lwy = int(left_wrist.x * w), int(left_wrist.y * h)
+
+        dx = lwx - lex
+        dy = lwy - ley
+
+        angle_rad = np.arctan2(dy, dx)
+        angle_deg = np.degrees(angle_rad)
+
+        if draw:
+            label = f"{angle_deg:.1f} deg"
+            cv2.line(frame, (lex, ley), (lwx, lwy), (255, 0, 0), 2)
+            cv2.putText(frame, label, (lex + 10, ley - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        return angle_deg
+    return None
+
+
+def calcRightForearmAngle(landmarks, frame, draw=True):
+    h, w, _ = frame.shape
+
+    if landmarks[vision.PoseLandmark.RIGHT_ELBOW].visibility > MIN_VISIBILITY and landmarks[vision.PoseLandmark.RIGHT_WRIST].visibility > MIN_VISIBILITY:
+        right_elbow = landmarks[vision.PoseLandmark.RIGHT_ELBOW]
+        right_wrist = landmarks[vision.PoseLandmark.RIGHT_WRIST]
+
+        rex, rey = int(right_elbow.x * w), int(right_elbow.y * h)
+        rwx, rwy = int(right_wrist.x * w), int(right_wrist.y * h)
+
+        dx = rwx - rex
+        dy = rwy - rey
+
+        angle_rad = np.arctan2(dy, dx)
+        angle_deg = np.degrees(angle_rad)
+
+        if draw:
+            label = f"{angle_deg:.1f} deg"
+            cv2.line(frame, (rex, rey), (rwx, rwy), (255, 0, 0), 2)
+            cv2.putText(frame, label, (rex + 10, rey - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        return angle_deg
+    return None
+# ----------- end: ANGLE CALCULATION FUNCTIONS ----------- #
+
+
+# ----------- CALIBRATION FUNCTIONS ----------- #
+def isArmStraightDown(angle):
+    """True if the angle is within tolerance of hanging straight down (~90 deg)."""
+    if angle is None:
+        return False
+    return abs(angle - ARM_STRAIGHT_TARGET) <= ARM_STRAIGHT_TOLERANCE
+
+
+def getSingleShoulderPos(landmarks, frame, side):
+    """Pixel position of one shoulder ('left' or 'right'), used to check stillness."""
+    h, w, _ = frame.shape
+    lm = landmarks[vision.PoseLandmark.LEFT_SHOULDER if side == 'left' else vision.PoseLandmark.RIGHT_SHOULDER]
+    if lm.visibility > MIN_VISIBILITY:
+        return (lm.x * w, lm.y * h)
+    return None
+
+
+def checkArmReady(side, landmarks, frame, prev_pos):
+    """
+    Checks whether ONE arm (bicep + forearm) is hanging straight down and
+    that shoulder hasn't drifted since the last frame (standing still).
+
+    Returns (ready: bool, shoulder_pos: tuple|None)
+    """
+    if side == 'left':
+        bicep = calcLeftBicepAngle(landmarks, frame, draw=True)
+        forearm = calcLeftForearmAngle(landmarks, frame, draw=True)
+    else:
+        bicep = calcRightBicepAngle(landmarks, frame, draw=True)
+        forearm = calcRightForearmAngle(landmarks, frame, draw=True)
+
+    arm_straight = isArmStraightDown(bicep) and isArmStraightDown(forearm)
+    shoulder_pos = getSingleShoulderPos(landmarks, frame, side)
+
+    is_still = False
+    if shoulder_pos is not None and prev_pos is not None:
+        dist = np.hypot(shoulder_pos[0] - prev_pos[0], shoulder_pos[1] - prev_pos[1])
+        is_still = dist <= STILLNESS_THRESHOLD_PX
+    # First frame a shoulder becomes visible: no prior position to compare yet.
+
+    return (arm_straight and is_still), shoulder_pos
+# ----------- end: CALIBRATION FUNCTIONS ----------- #
+
+
+# ----------- STATUS OVERLAY ----------- #
+def drawStatus(frame, mode, calibrated_sides, calibration_progress):
+    h, w, _ = frame.shape
+    is_calibrated = calibrated_sides['left'] or calibrated_sides['right']
+
+    if mode == 'calibration':
+        if is_calibrated:
+            if calibrated_sides['left'] and calibrated_sides['right']:
+                which = "Both Arms"
+            elif calibrated_sides['left']:
+                which = "Left Arm"
+            else:
+                which = "Right Arm"
+            text, color = f"Calibrated ({which})", (0, 255, 0)
+        else:
+            text, color = "Calibrating...", (0, 255, 255)
+
+        cv2.putText(frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
+
+        if not is_calibrated:
+            bar_x, bar_y, bar_w, bar_h = 20, 55, 250, 20
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (255, 255, 255), 2)
+            fill_w = int(bar_w * min(max(calibration_progress, 0.0), 1.0))
+            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + fill_w, bar_y + bar_h), (0, 255, 255), -1)
+
+        cv2.putText(frame, "Mode: Calibration  |  'c' switch mode  |  'r' reset",
+                    (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    else:
+        cal_text = "Calibrated" if is_calibrated else "Not Calibrated"
+        cal_color = (0, 255, 0) if is_calibrated else (0, 0, 255)
+        cv2.putText(frame, f"Mode: Regular  ({cal_text})", (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, cal_color, 2)
+        cv2.putText(frame, "'c' switch to Calibration mode  |  'r' reset",
+                    (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+# ----------- end: STATUS OVERLAY ----------- #
+
+
+def main():
+    # Configuration
+    base_options = python.BaseOptions(model_asset_path='pose_landmarker_full.task')
+    options1 = vision.PoseLandmarkerOptions(
+        base_options=base_options,
+        output_segmentation_masks=True,
+        running_mode=vision.RunningMode.VIDEO
+    )
+
+    # Video Feed
+    cap = cv2.VideoCapture(0)
+    landmarker = vision.PoseLandmarker.create_from_options(options1)
+
+    # ---- Calibration / mode state (tracked per-arm so one arm is enough) ---- #
+    mode = 'calibration'            # 'calibration' or 'regular'
+    prev_shoulder_pos = {'left': None, 'right': None}
+    calibration_start_time = {'left': None, 'right': None}
+    calibrated_sides = {'left': False, 'right': False}
+
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # Convert BGR (OpenCV) to RGB (MediaPipe)
+            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            image.flags.writeable = False
+
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
+            timestamp_ms = int(cv2.getTickCount() / cv2.getTickFrequency() * 1000)
+            results = landmarker.detect_for_video(mp_image, timestamp_ms)
+
+            image.flags.writeable = True
+            display_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+            if results.pose_landmarks:
+                # No skeleton drawing on purpose - only the arm lines drawn
+                # inside the angle-calculation functions below.
+                for pose_landmarks in results.pose_landmarks:
+                    pass  # last entry in the loop is used below (single-person tracking)
+
+                if mode == 'calibration':
+                    progresses = []
+                    for side in ('left', 'right'):
+                        ready, pos = checkArmReady(side, pose_landmarks, display_image, prev_shoulder_pos[side])
+                        prev_shoulder_pos[side] = pos
+
+                        if ready:
+                            if calibration_start_time[side] is None:
+                                calibration_start_time[side] = time.time()
+                            elapsed = time.time() - calibration_start_time[side]
+                            if elapsed >= CALIBRATION_HOLD_TIME:
+                                calibrated_sides[side] = True
+                        else:
+                            # That arm's pose broke or it moved: reset its hold timer.
+                            calibration_start_time[side] = None
+                            calibrated_sides[side] = False
+
+                        if calibration_start_time[side] is not None:
+                            progresses.append((time.time() - calibration_start_time[side]) / CALIBRATION_HOLD_TIME)
+                        else:
+                            progresses.append(0.0)
+
+                    progress = max(progresses)
+                    drawStatus(display_image, mode, calibrated_sides, progress)
+
+                    if (calibrated_sides['left'] or calibrated_sides['right']) and AUTO_SWITCH_TO_REGULAR:
+                        mode = 'regular'
+
+                else:  # regular mode: just read and display the angles
+                    calcLeftBicepAngle(pose_landmarks, display_image)
+                    calcRightBicepAngle(pose_landmarks, display_image)
+                    calcLeftForearmAngle(pose_landmarks, display_image)
+                    calcRightForearmAngle(pose_landmarks, display_image)
+                    drawStatus(display_image, mode, calibrated_sides, 1.0)
+
+            # Display the annotated image (arm lines + status only, no skeleton)
+            cv2.imshow('Pose Landmarker', display_image)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('c'):
+                mode = 'regular' if mode == 'calibration' else 'calibration'
+                if mode == 'calibration':
+                    calibration_start_time = {'left': None, 'right': None}
+                    prev_shoulder_pos = {'left': None, 'right': None}
+            elif key == ord('r'):
+                calibrated_sides = {'left': False, 'right': False}
+                calibration_start_time = {'left': None, 'right': None}
+                prev_shoulder_pos = {'left': None, 'right': None}
+                mode = 'calibration'
+
+    except KeyboardInterrupt:
+        print("Interrupted by user. Exiting...")
+        pass
+    finally:
+        landmarker.close()
+        cap.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
