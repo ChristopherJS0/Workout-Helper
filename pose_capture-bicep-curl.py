@@ -6,16 +6,22 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python.vision import drawing_utils, drawing_styles
 from mediapipe.tasks.python import vision
 
-MIN_VISIBILITY = 0.6
+MIN_VISIBILITY  = 0.6
 
 # ----------- CALIBRATION SETTINGS ----------- #
 ARM_STRAIGHT_TARGET = 90.0      # degrees; arm hanging straight down reads ~90 deg from horizontal
-ARM_STRAIGHT_TOLERANCE = 25.0   # +/- degrees still counted as "straight down"
+ARM_STRAIGHT_TOLERANCE = 12.0   # +/- degrees still counted as "straight down"
+FOREARM_STRAIGHT_TOLERANCE = 25.0  # degrees; forearm hanging straight down reads ~90 deg from horizontal
 STILLNESS_THRESHOLD_PX = 20     # max shoulder drift (px) between frames to count as "still"
 CALIBRATION_HOLD_TIME = 4.0     # seconds the pose must be held (within the requested 3-5s range)
 AUTO_SWITCH_TO_REGULAR = False   # once calibrated, drop into regular mode automatically
 # --------------------------------------------- #
 
+# ----------- CURL SETTINGS ----------- #
+CURL_ANGLE_TARGET = -80.0      # degrees; forearm angle at the top of a curl (from horizontal)
+CURL_ANGLE_TOLERANCE = 15.0    # +/- degrees still counted
+CURL_HOLD_TIME = 1.0          # seconds the curl must be held to count as a rep
+# -------------------------------------- #
 
 # ----------- ANGLE CALCULATION FUNCTIONS ----------- #
 # Each function draws only its own arm line/label (if draw=True) and returns
@@ -46,7 +52,6 @@ def calcLeftBicepAngle(landmarks, frame, draw=True):
         return angle_deg
     return None
 
-
 def calcRightBicepAngle(landmarks, frame, draw=True):
     h, w, _ = frame.shape
 
@@ -72,7 +77,6 @@ def calcRightBicepAngle(landmarks, frame, draw=True):
         return angle_deg
     return None
 
-
 def calcLeftForearmAngle(landmarks, frame, draw=True):
     h, w, _ = frame.shape
 
@@ -97,7 +101,6 @@ def calcLeftForearmAngle(landmarks, frame, draw=True):
 
         return angle_deg
     return None
-
 
 def calcRightForearmAngle(landmarks, frame, draw=True):
     h, w, _ = frame.shape
@@ -127,11 +130,16 @@ def calcRightForearmAngle(landmarks, frame, draw=True):
 
 
 # ----------- CALIBRATION FUNCTIONS ----------- #
-def isArmStraightDown(angle):
+def isArmStraightDown(angle, part):
     """True if the angle is within tolerance of hanging straight down (~90 deg)."""
+    # Returns Bool: True if the arm is considered straight down, False otherwise.
     if angle is None:
         return False
-    return abs(angle - ARM_STRAIGHT_TARGET) <= ARM_STRAIGHT_TOLERANCE
+    if part == 'bicep':
+        return abs(angle - ARM_STRAIGHT_TARGET) <= ARM_STRAIGHT_TOLERANCE
+    elif part == 'forearm':
+        return abs(angle - ARM_STRAIGHT_TARGET) <= FOREARM_STRAIGHT_TOLERANCE
+    return False
 
 
 def getSingleShoulderPos(landmarks, frame, side):
@@ -157,7 +165,7 @@ def checkArmReady(side, landmarks, frame, prev_pos):
         bicep = calcRightBicepAngle(landmarks, frame, draw=True)
         forearm = calcRightForearmAngle(landmarks, frame, draw=True)
 
-    arm_straight = isArmStraightDown(bicep) and isArmStraightDown(forearm)
+    arm_straight = isArmStraightDown(bicep, 'bicep') and isArmStraightDown(forearm, 'forearm')
     shoulder_pos = getSingleShoulderPos(landmarks, frame, side)
 
     is_still = False
@@ -169,6 +177,10 @@ def checkArmReady(side, landmarks, frame, prev_pos):
     return (arm_straight and is_still), shoulder_pos
 # ----------- end: CALIBRATION FUNCTIONS ----------- #
 
+# -------- CURL FUNCTIONS ----------- #
+
+
+# ----------- end: CURL FUNCTIONS ----------- #
 
 # ----------- STATUS OVERLAY ----------- #
 def drawStatus(frame, mode, calibrated_sides, calibration_progress):
@@ -190,6 +202,7 @@ def drawStatus(frame, mode, calibrated_sides, calibration_progress):
         cv2.putText(frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
 
         if not is_calibrated:
+            # Making the progress bar a bit more visible by drawing a white border around it
             bar_x, bar_y, bar_w, bar_h = 20, 55, 250, 20
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (255, 255, 255), 2)
             fill_w = int(bar_w * min(max(calibration_progress, 0.0), 1.0))
@@ -205,7 +218,6 @@ def drawStatus(frame, mode, calibrated_sides, calibration_progress):
         cv2.putText(frame, "'c' switch to Calibration mode  |  'r' reset",
                     (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 # ----------- end: STATUS OVERLAY ----------- #
-
 
 def main():
     # Configuration
@@ -244,13 +256,12 @@ def main():
             display_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
             if results.pose_landmarks:
-                # No skeleton drawing on purpose - only the arm lines drawn
-                # inside the angle-calculation functions below.
-                for pose_landmarks in results.pose_landmarks:
-                    pass  # last entry in the loop is used below (single-person tracking)
+                pose_landmarks = results.pose_landmarks[-1]
 
                 if mode == 'calibration':
                     progresses = []
+                    # Check each arm for straight-down pose and stillness, and update calibration state. 
+                    # Should determine left and/or right arm calibration independently, so that if one arm is calibrated, the other can still be calibrated.
                     for side in ('left', 'right'):
                         ready, pos = checkArmReady(side, pose_landmarks, display_image, prev_shoulder_pos[side])
                         prev_shoulder_pos[side] = pos
@@ -258,7 +269,7 @@ def main():
                         if ready:
                             if calibration_start_time[side] is None:
                                 calibration_start_time[side] = time.time()
-                            elapsed = time.time() - calibration_start_time[side]
+                            elapsed = time.time() - calibration_start_time[side] # Calc. time from when the arm was first detected as ready
                             if elapsed >= CALIBRATION_HOLD_TIME:
                                 calibrated_sides[side] = True
                         else:
@@ -266,9 +277,9 @@ def main():
                             calibration_start_time[side] = None
                             calibrated_sides[side] = False
 
-                        if calibration_start_time[side] is not None:
+                        if calibration_start_time[side] is not None: # Add progress for this arm if it's currently being held still and straight down
                             progresses.append((time.time() - calibration_start_time[side]) / CALIBRATION_HOLD_TIME)
-                        else:
+                        else: # Add 0 progress for this arm if it's not being held still and straight down
                             progresses.append(0.0)
 
                     progress = max(progresses)
@@ -308,7 +319,6 @@ def main():
         landmarker.close()
         cap.release()
         cv2.destroyAllWindows()
-
 
 if __name__ == "__main__":
     main()
