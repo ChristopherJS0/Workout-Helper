@@ -18,7 +18,7 @@ AUTO_SWITCH_TO_REGULAR = False   # once calibrated, drop into regular mode autom
 # --------------------------------------------- #
 
 # ----------- CURL SETTINGS ----------- #
-CURL_ANGLE_TARGET = -80.0      # degrees; forearm angle at the top of a curl (from horizontal)
+CURL_ANGLE_TARGET = 80.0      # degrees; forearm angle at the top of a curl (from horizontal)
 CURL_ANGLE_TOLERANCE = 15.0    # +/- degrees still counted
 CURL_HOLD_TIME = 1.0          # seconds the curl must be held to count as a rep
 # -------------------------------------- #
@@ -175,9 +175,29 @@ def checkArmReady(side, landmarks, frame, prev_pos):
     # First frame a shoulder becomes visible: no prior position to compare yet.
 
     return (arm_straight and is_still), shoulder_pos
+
+def calibrateArm(calibration_start_time, calibrated_sides, side):
+    if calibration_start_time[side] is None:
+        calibration_start_time[side] = time.time()
+    elapsed = time.time() - calibration_start_time[side] # Calc. time from when the arm was first detected as ready
+    if elapsed >= CALIBRATION_HOLD_TIME:
+        calibrated_sides[side] = True
+
+def resetCalibration(calibration_start_time, calibrated_sides, side):
+    # That arm's pose broke or it moved: reset its hold timer.
+    calibration_start_time[side] = None
+    calibrated_sides[side] = False
+
 # ----------- end: CALIBRATION FUNCTIONS ----------- #
 
 # -------- CURL FUNCTIONS ----------- #
+def isArmCurled(angle):
+    """True if the forearm angle is within tolerance of curled (~80 deg)."""
+    if angle is None:
+        return False
+    return abs(angle - CURL_ANGLE_TARGET) <= CURL_ANGLE_TOLERANCE
+
+
 
 
 # ----------- end: CURL FUNCTIONS ----------- #
@@ -267,15 +287,10 @@ def main():
                         prev_shoulder_pos[side] = pos
 
                         if ready:
-                            if calibration_start_time[side] is None:
-                                calibration_start_time[side] = time.time()
-                            elapsed = time.time() - calibration_start_time[side] # Calc. time from when the arm was first detected as ready
-                            if elapsed >= CALIBRATION_HOLD_TIME:
-                                calibrated_sides[side] = True
+                            calibrateArm(calibration_start_time, calibrated_sides, side)
                         else:
                             # That arm's pose broke or it moved: reset its hold timer.
-                            calibration_start_time[side] = None
-                            calibrated_sides[side] = False
+                            resetCalibration(calibration_start_time, calibrated_sides, side)
 
                         if calibration_start_time[side] is not None: # Add progress for this arm if it's currently being held still and straight down
                             progresses.append((time.time() - calibration_start_time[side]) / CALIBRATION_HOLD_TIME)
@@ -285,6 +300,10 @@ def main():
                     progress = max(progresses)
                     drawStatus(display_image, mode, calibrated_sides, progress)
 
+                    # Change here to switch to curling mode,
+                    # note: make sure the callibrated sides are saved to send to
+                    # curling mode. Curling mode will adjust to either 
+                    # front facing or side view. 
                     if (calibrated_sides['left'] or calibrated_sides['right']) and AUTO_SWITCH_TO_REGULAR:
                         mode = 'regular'
 
