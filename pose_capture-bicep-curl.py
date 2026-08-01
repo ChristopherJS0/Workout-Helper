@@ -141,7 +141,6 @@ def isArmStraightDown(angle, part):
         return abs(angle - ARM_STRAIGHT_TARGET) <= FOREARM_STRAIGHT_TOLERANCE
     return False
 
-
 def getSingleShoulderPos(landmarks, frame, side):
     """Pixel position of one shoulder ('left' or 'right'), used to check stillness."""
     h, w, _ = frame.shape
@@ -149,7 +148,6 @@ def getSingleShoulderPos(landmarks, frame, side):
     if lm.visibility > MIN_VISIBILITY:
         return (lm.x * w, lm.y * h)
     return None
-
 
 def checkArmReady(side, landmarks, frame, prev_pos):
     """
@@ -197,6 +195,14 @@ def isArmCurled(angle):
         return False
     return abs(angle - CURL_ANGLE_TARGET) <= CURL_ANGLE_TOLERANCE
 
+def curlCheck(curling_start_time, curled_sides, side):
+    ''' Almost identical to calibrate arm, only this is meant to reinforce
+    proper curl timing. Prevents quick curls.'''
+    if curling_start_time[side] is None:
+        curling_start_time[side] = time.time()
+    elapsed = time.time() - curling_start_time[side] # Calc. time from when the arm was first detected as ready
+    if elapsed >= CURL_HOLD_TIME:
+        curled_sides[side] = True
 
 
 
@@ -258,6 +264,9 @@ def main():
     calibration_start_time = {'left': None, 'right': None}
     calibrated_sides = {'left': False, 'right': False}
 
+    curling_start_time = {'left': None, 'right': None}
+    curled_sides = {'left': False, 'right': False}
+    
     try:
         while cap.isOpened():
             ret, frame = cap.read()
