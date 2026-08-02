@@ -15,6 +15,7 @@ FOREARM_STRAIGHT_TOLERANCE = 25.0  # degrees; forearm hanging straight down read
 STILLNESS_THRESHOLD_PX = 20     # max shoulder drift (px) between frames to count as "still"
 CALIBRATION_HOLD_TIME = 4.0     # seconds the pose must be held (within the requested 3-5s range)
 AUTO_SWITCH_TO_REGULAR = False   # once calibrated, drop into regular mode automatically
+AWAY_TOLERANCE_TIME = 4         # time allowed from being away from the view of camera.
 # --------------------------------------------- #
 
 # ----------- CURL SETTINGS ----------- #
@@ -181,6 +182,15 @@ def calibrateArm(calibration_start_time, calibrated_sides, side):
     if elapsed >= CALIBRATION_HOLD_TIME:
         calibrated_sides[side] = True
 
+def decalibrateTimer(away_start_time, side):
+    if away_start_time[side] == None:
+        away_start_time = time.time()
+    timeAway = time.time() - away_start_time[side]
+    if timeAway >= AWAY_TOLERANCE_TIME:
+        # need to finish the decalibration process, which is to reset the calibration timer and set the calibrated_sides to False for that side.
+        pass
+        
+
 def resetCalibration(calibration_start_time, calibrated_sides, side):
     # That arm's pose broke or it moved: reset its hold timer.
     calibration_start_time[side] = None
@@ -266,6 +276,7 @@ def main():
 
     curling_start_time = {'left': None, 'right': None}
     curled_sides = {'left': False, 'right': False}
+    away_start_time = {'left': None, 'right': None}
     
     try:
         while cap.isOpened():
@@ -315,7 +326,32 @@ def main():
                     # front facing or side view. 
                     if (calibrated_sides['left'] or calibrated_sides['right']) and AUTO_SWITCH_TO_REGULAR:
                         mode = 'regular'
+                elif mode == 'curling':
+                    # Initiation: Set for either one sided or front sided.
+                    # must break and return person isn't there OR switched sides.
+                    # if Calibrated_sides = both true -> Front Facing Mode
+                    # elif Calibrated_sides = one true -> Single Side Facing Mode
+                    # else: return to calibration
+                    true_sides = [side for side, is_calibrated in calibrated_sides.items() if is_calibrated]
+                    for side in true_sides:
+                        ready, pos = checkArmReady(side, pose_landmarks, display_image, prev_shoulder_pos[side])
+                        prev_shoulder_pos[side] = pos
+                        # Pick up HERE: Need to continue on the curling mode of the while loop.
+                        # Problems: cant figure out how to disable curling mode if user switches arms or faces
+                        # a new direction. 
+                        # New lines here should be -> if ready is false, then start decalibration timer.
 
+                        
+                    # curling has 2 submodes, resting and lifting. Lifting will
+                    # mean that the user curling and has their forearm angle up to at least
+                    # 70 degrees. Resting is when the user still has their arm in frame. 
+                    
+                    # The constant that should remain is that the bicep part MUST stay
+                    # within the acceptable 90 degree angle range.
+
+
+                    drawStatus(display_image, mode, calibrated_sides, progress)
+            
                 else:  # regular mode: just read and display the angles
                     calcLeftBicepAngle(pose_landmarks, display_image)
                     calcRightBicepAngle(pose_landmarks, display_image)
