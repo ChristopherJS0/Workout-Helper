@@ -14,7 +14,6 @@ ARM_STRAIGHT_TOLERANCE = 12.0   # +/- degrees still counted as "straight down"
 FOREARM_STRAIGHT_TOLERANCE = 25.0  # degrees; forearm hanging straight down reads ~90 deg from horizontal
 STILLNESS_THRESHOLD_PX = 20     # max shoulder drift (px) between frames to count as "still"
 CALIBRATION_HOLD_TIME = 4.0     # seconds the pose must be held (within the requested 3-5s range)
-AUTO_SWITCH_TO_REGULAR = False   # once calibrated, drop into regular mode automatically
 AWAY_TOLERANCE_TIME = 4         # time allowed from being away from the view of camera.
 # --------------------------------------------- #
 
@@ -183,12 +182,13 @@ def calibrateArm(calibration_start_time, calibrated_sides, side):
         calibrated_sides[side] = True
 
 def decalibrateTimer(away_start_time, side):
+    ''' If the arm is away from the camera for too long, decalibrate it. Returns True if decalibration should occur. '''
     if away_start_time[side] == None:
-        away_start_time = time.time()
+        away_start_time[side] = time.time()
     timeAway = time.time() - away_start_time[side]
     if timeAway >= AWAY_TOLERANCE_TIME:
-        # need to finish the decalibration process, which is to reset the calibration timer and set the calibrated_sides to False for that side.
-        pass
+        return True
+    return False
         
 
 def resetCalibration(calibration_start_time, calibrated_sides, side):
@@ -205,7 +205,17 @@ def isArmCurled(angle):
         return False
     return abs(angle - CURL_ANGLE_TARGET) <= CURL_ANGLE_TOLERANCE
 
-def curlCheck(curling_start_time, curled_sides, side):
+def isProperForm(side, landmarks, frame):
+    """True if the bicep is straight down and the forearm is curled."""
+    if side == 'left':
+        bicep_angle = calcLeftBicepAngle(landmarks, frame, draw=True)
+        forearm_angle = calcLeftForearmAngle(landmarks, frame, draw=True)
+    else:
+        bicep_angle = calcRightBicepAngle(landmarks, frame, draw=True)
+        forearm_angle = calcRightForearmAngle(landmarks, frame, draw=True)
+    return isArmStraightDown(bicep_angle, 'bicep') and isArmCurled(forearm_angle)
+
+def curlTimer(curling_start_time, curled_sides, side):
     ''' Almost identical to calibrate arm, only this is meant to reinforce
     proper curl timing. Prevents quick curls.'''
     if curling_start_time[side] is None:
@@ -213,8 +223,6 @@ def curlCheck(curling_start_time, curled_sides, side):
     elapsed = time.time() - curling_start_time[side] # Calc. time from when the arm was first detected as ready
     if elapsed >= CURL_HOLD_TIME:
         curled_sides[side] = True
-
-
 
 # ----------- end: CURL FUNCTIONS ----------- #
 
@@ -324,15 +332,23 @@ def main():
                     # note: make sure the callibrated sides are saved to send to
                     # curling mode. Curling mode will adjust to either 
                     # front facing or side view. 
-                    if (calibrated_sides['left'] or calibrated_sides['right']) and AUTO_SWITCH_TO_REGULAR:
-                        mode = 'regular'
+                    if (calibrated_sides['left'] or calibrated_sides['right']):
+                        mode = 'curling'
+                        true_sides = [side for side, is_calibrated in calibrated_sides.items() if is_calibrated]
+
                 elif mode == 'curling':
                     # Initiation: Set for either one sided or front sided.
                     # must break and return person isn't there OR switched sides.
-                    # if Calibrated_sides = both true -> Front Facing Mode
-                    # elif Calibrated_sides = one true -> Single Side Facing Mode
-                    # else: return to calibration
-                    true_sides = [side for side, is_calibrated in calibrated_sides.items() if is_calibrated]
+                    if not (calibrated_sides['left'] or calibrated_sides['right']):
+                        mode = 'calibration'
+                        calibration_start_time = {'left': None, 'right': None}
+                        prev_shoulder_pos = {'left': None, 'right': None}
+                        continue
+
+                    # check if undready-sides are ready using checkArmReady.
+                    # only sides in true_sides should be validated.
+                    # if other sides are ready:true, then decalibration timer should start bc sides are switching.
+
                     for side in true_sides:
                         ready, pos = checkArmReady(side, pose_landmarks, display_image, prev_shoulder_pos[side])
                         prev_shoulder_pos[side] = pos
@@ -341,11 +357,19 @@ def main():
                         # a new direction. 
                         # New lines here should be -> if ready is false, then start decalibration timer.
 
+                        # if User out of Camera View, Decalibrate Timer
+                        if pos is None:
+                            decalibrateTimer(away_start_time, side)
+                        else: 
+                            away_start_time[side] = None # reset the away timer if the user is back in view
                         
-                    # curling has 2 submodes, resting and lifting. Lifting will
-                    # mean that the user curling and has their forearm angle up to at least
-                    # 70 degrees. Resting is when the user still has their arm in frame. 
-                    
+                        # curling has 2 submodes, resting and lifting. Lifting will
+                        # mean that the user curling and has their forearm angle up to at least
+                        # 70 degrees. Resting is when the user still has their arm in frame. 
+                        if isProperForm(side, pose_landmarks, display_image):
+                            curlTimer(curling_start_time, curled_sides, side)
+                         
+
                     # The constant that should remain is that the bicep part MUST stay
                     # within the acceptable 90 degree angle range.
 
