@@ -22,6 +22,9 @@ CURL_ANGLE_TARGET = 80.0      # degrees; forearm angle at the top of a curl (fro
 CURL_ANGLE_TOLERANCE = 15.0    # +/- degrees still counted
 CURL_HOLD_TIME = 1.0          # seconds the curl must be held to count as a rep
 RESTING_HOLD_TIME = 2.0        # seconds the arm must be held in resting position before next curl can count
+RESTING_ELBOW_ANGLE = 180.0    # straight elbow angle in degrees
+RESTING_ELBOW_TOLERANCE = 25.0 # tolerance for straight elbow detection
+CURL_ELBOW_ANGLE_MAX = 120.0   # maximum elbow bend angle for a detected curl
 # -------------------------------------- #
 
 # ----------- ANGLE CALCULATION FUNCTIONS ----------- #
@@ -127,6 +130,47 @@ def calcRightForearmAngle(landmarks, frame, draw=True):
 
         return angle_deg
     return None
+
+
+def calcElbowAngle(landmarks, frame, side, draw=True):
+    """Return the actual elbow bend angle between upper arm and forearm."""
+    h, w, _ = frame.shape
+
+    if side == 'left':
+        shoulder = landmarks[vision.PoseLandmark.LEFT_SHOULDER]
+        elbow = landmarks[vision.PoseLandmark.LEFT_ELBOW]
+        wrist = landmarks[vision.PoseLandmark.LEFT_WRIST]
+    else:
+        shoulder = landmarks[vision.PoseLandmark.RIGHT_SHOULDER]
+        elbow = landmarks[vision.PoseLandmark.RIGHT_ELBOW]
+        wrist = landmarks[vision.PoseLandmark.RIGHT_WRIST]
+
+    if (shoulder.visibility <= MIN_VISIBILITY or elbow.visibility <= MIN_VISIBILITY or wrist.visibility <= MIN_VISIBILITY):
+        return None
+
+    sx, sy = int(shoulder.x * w), int(shoulder.y * h)
+    ex, ey = int(elbow.x * w), int(elbow.y * h)
+    wx, wy = int(wrist.x * w), int(wrist.y * h)
+
+    upper_arm = np.array([sx - ex, sy - ey], dtype=np.float32)
+    forearm = np.array([wx - ex, wy - ey], dtype=np.float32)
+
+    upper_arm_norm = np.linalg.norm(upper_arm)
+    forearm_norm = np.linalg.norm(forearm)
+    if upper_arm_norm < 1e-6 or forearm_norm < 1e-6:
+        return None
+
+    cosine = np.dot(upper_arm, forearm) / (upper_arm_norm * forearm_norm)
+    angle_deg = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+
+    if draw:
+        label = f"{angle_deg:.1f} deg"
+        cv2.line(frame, (ex, ey), (sx, sy), (255, 0, 0), 2)
+        cv2.line(frame, (ex, ey), (wx, wy), (255, 0, 0), 2)
+        cv2.putText(frame, label, (ex + 10, ey - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+    return angle_deg
 # ----------- end: ANGLE CALCULATION FUNCTIONS ----------- #
 
 
@@ -207,24 +251,19 @@ def isArmCurled(angle):
     return abs(angle - CURL_ANGLE_TARGET) <= CURL_ANGLE_TOLERANCE
 
 def isArmResting(side, landmarks, frame):
-    """True if the forearm and bicep are hanging straight down (resting)."""
-    if side == 'left':
-        forearm_angle = calcLeftForearmAngle(landmarks, frame, draw=True)
-        bicep_angle = calcLeftBicepAngle(landmarks, frame, draw=True)
-    else:
-        forearm_angle = calcRightForearmAngle(landmarks, frame, draw=True)
-        bicep_angle = calcRightBicepAngle(landmarks, frame, draw=True)
-    return isArmStraightDown(forearm_angle, 'forearm') and isArmStraightDown(bicep_angle, 'bicep')
+    """True if the elbow is nearly straight, which corresponds to a resting arm."""
+    elbow_angle = calcElbowAngle(landmarks, frame, side, draw=False)
+    if elbow_angle is None:
+        return False
+    return abs(elbow_angle - RESTING_ELBOW_ANGLE) <= RESTING_ELBOW_TOLERANCE
+
 
 def isProperForm(side, landmarks, frame):
-    """True if the bicep is straight down and the forearm is curled."""
-    if side == 'left':
-        bicep_angle = calcLeftBicepAngle(landmarks, frame, draw=True)
-        forearm_angle = calcLeftForearmAngle(landmarks, frame, draw=True)
-    else:
-        bicep_angle = calcRightBicepAngle(landmarks, frame, draw=True)
-        forearm_angle = calcRightForearmAngle(landmarks, frame, draw=True)
-    return isArmStraightDown(bicep_angle, 'bicep') and isArmCurled(forearm_angle)
+    """True if the elbow is bent enough to look like a curl."""
+    elbow_angle = calcElbowAngle(landmarks, frame, side, draw=False)
+    if elbow_angle is None:
+        return False
+    return elbow_angle <= CURL_ELBOW_ANGLE_MAX
 
 def curlTimer(curling_start_time, curled_sides, curlCount, side):
     ''' Almost identical to calibrate arm, only this is meant to reinforce
@@ -236,6 +275,7 @@ def curlTimer(curling_start_time, curled_sides, curlCount, side):
         print(f"Curl completed for {side} arm! Total curls: {curlCount[side] + 1}")
         curled_sides[side] = True
         curlCount[side] += 1
+        curling_start_time[side] = None
 
 def restingTimer(resting_start_time, curled_sides, side):
     ''' Almost identical to calibrate arm, only this is meant to reinforce
@@ -246,6 +286,7 @@ def restingTimer(resting_start_time, curled_sides, side):
     if elapsed >= RESTING_HOLD_TIME:
         print(f"Resting period completed for {side} arm!")
         curled_sides[side] = False
+        resting_start_time[side] = None
 
 # ----------- end: CURL FUNCTIONS ----------- #
 
@@ -289,15 +330,19 @@ def drawStatus(frame, mode, calibrated_sides, calibration_progress):
 def main():
     # Configuration
     base_options = python.BaseOptions(model_asset_path='pose_landmarker_full.task')
-    options1 = vision.PoseLandmarkerOptions(
+    options = vision.PoseLandmarkerOptions(
         base_options=base_options,
         output_segmentation_masks=True,
         running_mode=vision.RunningMode.VIDEO
     )
 
     # Video Feed
-    cap = cv2.VideoCapture(0)
-    landmarker = vision.PoseLandmarker.create_from_options(options1)
+    cap = cv2.VideoCapture(0)  # Use webcam
+    # Or use a video file instead of webcam.
+    if not cap.isOpened():
+        cap = cv2.VideoCapture('workout.mp4')
+
+    landmarker = vision.PoseLandmarker.create_from_options(options)
 
     # ---- Calibration / mode state (tracked per-arm so one arm is enough) ---- #
     mode = 'calibration'            # 'calibration' or 'regular'
